@@ -135,15 +135,7 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public boolean add(E item) {
     // TODO - Avoid code duplication if you can
-	  if(this.size() == 0) {
-		  Page<E> newPage = new Page<E>(head, tail);
-		  this.head.next = newPage;
-		  this.tail.prev = newPage;
-		  
-	  }
-	  
-	  
-	  
+	  add(size(), item);
 	  return true;
   }
 
@@ -172,6 +164,21 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public void add(int pos, E item) {
     // TODO
+	  if (item == null) throw new NullPointerException();
+	  if (pos < 0 || pos > this.totalSize) throw new IndexOutOfBoundsException();
+	  
+	  if(this.totalSize == 0) {
+		  Page<E> newPage = new Page<E>(head, tail);
+		  newPage.count = 1;
+		  newPage.addItem(0, item);
+		  
+		  this.head.next = newPage;
+		  this.tail.prev = newPage;
+		  pageIndex.add(new IndexEntry(newPage, 0, newPage.count));  
+		  this.totalSize++;
+		  return;
+	  }
+	  
 	  
   }
 
@@ -221,6 +228,7 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public ListIterator<E> listIterator(int pos) {
     // TODO
+	 
   }
 
   // --- Private Helper Methods and Classes ---
@@ -240,6 +248,15 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
    */
   private PageInfo<E> findPageForLogicalIndex(int pos) {
     // TODO
+	  if(pos <= 0) throw new IllegalArgumentException();
+	  if(pos > pageIndex.size()) throw new IllegalArgumentException();
+	  
+	  int index = Collections.binarySearch(pageIndex, pos, INDEX_COMPARATOR);
+	  if(index > pageIndex.size()) throw new IllegalArgumentException();  //?
+	  
+	  int offset = 0;
+	  
+	  return new PageInfo(pageIndex.get(index).page, offset);
   }
 
   /**
@@ -254,6 +271,13 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
    */
   private int findIndexInPageIndex(Page<E> page) {
     // TODO
+	  for(IndexEntry<E> i : pageIndex) {
+		  if(i.page.equals(page)){
+			  return pageIndex.indexOf(i);
+		  }
+	  }
+	  
+	  return -1;
   }
 
   /**
@@ -267,6 +291,9 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
    */
   private void updatePageIndex(int startIndex, int delta) {
     // TODO
+	  for(int i = startIndex; i < pageIndex.size(); i++) {
+		  pageIndex.get(i).logicalIndex += delta;
+	  }
   }
 
   /**
