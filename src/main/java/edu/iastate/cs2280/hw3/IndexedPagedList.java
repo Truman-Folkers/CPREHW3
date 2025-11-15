@@ -101,6 +101,14 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     // Initialize head and tail dummy nodes, link them.
     // Initialize totalSize, modificationCount.
     // Initialize the pageIndex ArrayList.
+	  
+	  head = new Page<E>(null, null);
+	  tail = new Page<E>(null, null);
+	  head.prev = tail;
+	  tail.next = head;
+	  
+	  pageIndex = new ArrayList<IndexEntry<E>>();
+	  
   }
 
   /**
@@ -111,6 +119,8 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public int size() {
     // TODO
+	  return 0;
+	  
   }
 
   /**
@@ -125,6 +135,16 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public boolean add(E item) {
     // TODO - Avoid code duplication if you can
+	  if(this.size() == 0) {
+		  Page<E> newPage = new Page<E>(head, tail);
+		  this.head.next = newPage;
+		  this.tail.prev = newPage;
+		  
+	  }
+	  
+	  
+	  
+	  return true;
   }
 
   /**
@@ -152,6 +172,7 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public void add(int pos, E item) {
     // TODO
+	  
   }
 
   /**
@@ -580,6 +601,7 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public boolean hasPrevious() {
       // TODO
+    	
     }
 
     /**
