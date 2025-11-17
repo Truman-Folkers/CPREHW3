@@ -167,17 +167,105 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
 	  if (item == null) throw new NullPointerException();
 	  if (pos < 0 || pos > this.totalSize) throw new IndexOutOfBoundsException();
 	  
-	  if(this.totalSize == 0) {
-		  Page<E> newPage = new Page<E>(head, tail);
-		  newPage.count = 1;
-		  newPage.addItem(0, item);
-		  
-		  this.head.next = newPage;
-		  this.tail.prev = newPage;
-		  pageIndex.add(new IndexEntry(newPage, 0, newPage.count));  
-		  this.totalSize++;
-		  return;
+	  this.totalSize++;
+	  this.modCount++;
+	  
+	  if(this.size() == 1) {
+	    Page<E> p = new Page<E>(tail, head);
+        p.items[0] = item;
+        p.count = 1;
+
+        // link between head and tail
+        head.next = p;
+        p.prev = head;
+        p.next = tail;
+        tail.prev = p;
+
+        // Create new IndexEntry
+        pageIndex.add(new IndexEntry<>(p, 0, 1));
+        return;
 	  }
+	  
+	  
+	  PageInfo<E> pinfo = findPageForLogicalIndex(pos);
+	  Page<E> page = pinfo.page;
+	  int offset = pinfo.offset;
+
+	  int pageIdx = findIndexInPageIndex(page);    
+	  IndexEntry<E> entry = pageIndex.get(pageIdx);
+	  
+	  if(page.count < PAGE_CAPACITY) {
+		  for(int i = page.count; i < offset; i--) {
+			  page.items[i] = page.items[i-1];
+		  }
+		  
+		  page.items[offset] = item;
+	      page.count++;
+	      entry.count = page.count;
+
+	        // update logicalIndex for all later pages
+	      updatePageIndex(pageIdx + 1, +1);
+	      return;
+	  }
+	  
+	  Page<E> newPage = new Page<E>(page, page.next);
+	  int move = HALF_CAPACITY;
+
+	  // start index to move from
+	  int start = page.count - move;
+
+	    // move HALF_CAPACITY items to newPage
+	  for (int i = 0; i < move; i++) {
+	        newPage.items[i] = page.items[start + i];
+	        page.items[start + i] = null;
+	  }
+
+	  newPage.count = move;
+	  page.count -= move;
+
+	    // update old page entry
+	  entry.count = page.count;
+
+	    // link newPage after page
+	  Page<E> after = page.next;
+	  page.next = newPage;
+	  newPage.prev = page;
+	  newPage.next = after;
+	  after.prev = newPage;
+
+	    // insert new index entry
+	  int newPageIdx = pageIdx + 1;
+	  int newLogicalIndex = entry.logicalIndex + page.count;
+	  pageIndex.add(newPageIdx,
+	            new IndexEntry<>(newPage, newLogicalIndex, newPage.count));
+
+	    // ----- 4b. Decide which page gets the new item -----
+	  if (pos <= entry.logicalIndex + page.count) {
+	        // insert into original page
+
+	      for (int i = page.count; i > offset; i--) {
+	          page.items[i] = page.items[i - 1];
+	      }
+	      page.items[offset] = item;
+	      page.count++;
+	      entry.count = page.count;
+
+	  } else {
+	        // insert into new page
+	      int newOffset = pos - newLogicalIndex;
+
+	      for (int i = newPage.count; i > newOffset; i--) {
+	          newPage.items[i] = newPage.items[i - 1];
+	      }
+	      newPage.items[newOffset] = item;
+	      newPage.count++;
+
+	      pageIndex.get(newPageIdx).count = newPage.count;
+	  }
+
+	    // ----- 5. Update logicalIndex for all pages AFTER the insertion -----
+	  updatePageIndex(newPageIdx + 1, +1);
+	  
 	  
 	  
   }
@@ -209,6 +297,96 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public E remove(int pos) {
     // TODO
+    if (pos < 0 || pos >= totalSize) {
+        throw new IndexOutOfBoundsException();
+    }
+
+    // ----- 1. Find the page + offset -----
+    PageInfo<E> info = findPageForLogicalIndex(pos);
+    Page<E> page = info.page;
+    int offset = info.offset;
+
+    // Save removed element
+    E removed = page.items[offset];
+
+    // Structural modification
+    modCount++;
+    totalSize--;
+
+    // ----- 2. Remove element from page array -----
+    for (int i = offset; i < page.count - 1; i++) {
+        page.items[i] = page.items[i + 1];
+    }
+    // Update IndexEntry for this page
+    int pageIdx = findIndexInPageIndex(page);
+    pageIndex.get(pageIdx).count = page.count;
+
+    // ----- 3. Underflow? (count < HALF_CAPACITY) -----
+    if (page.count < HALF_CAPACITY) {
+
+        Page<E> succ = page.next;
+
+        // We only rebalance/merge if successor is a real page (not tail)
+        if (succ != tail) {
+
+            // ----- 3a. REBALANCE -----
+            if (succ.count > HALF_CAPACITY) {
+
+                // Move successor.items[0] → end of current page
+                page.items[page.count] = succ.items[0];
+                page.count++;
+                pageIndex.get(pageIdx).count = page.count;
+
+                // Shift successor left
+                for (int i = 0; i < succ.count - 1; i++) {
+                    succ.items[i] = succ.items[i + 1];
+                }
+                succ.items[succ.count - 1] = null;
+                succ.count--;
+                pageIndex.get(pageIdx + 1).count = succ.count;
+
+                // Done with rebalance
+
+            } else {
+                // ----- 3b. FULL MERGE -----
+
+                // Move all succ items → end of current page
+                for (int i = 0; i < succ.count; i++) {
+                    page.items[page.count + i] = succ.items[i];
+                }
+
+                page.count += succ.count;
+                pageIndex.get(pageIdx).count = page.count;
+
+                // Unlink successor from linked list
+                Page<E> succNext = succ.next;
+                page.next = succNext;
+                succNext.prev = page;
+
+                // Remove successor IndexEntry
+                pageIndex.remove(pageIdx + 1);
+            }
+        }
+    }
+
+    // ----- 4. Edge case — page becomes empty AND is last page -----
+    if (page.count == 0 && page != head && page.next == tail) {
+
+        // unlink the empty last page
+        Page<E> prev = page.prev;
+        prev.next = tail;
+        tail.prev = prev;
+
+        // remove its IndexEntry
+        pageIndex.remove(pageIdx);
+    }
+
+    // ----- 5. Update logicalIndex for all following pages -----
+    updatePageIndex(pageIdx + 1, -1);
+
+    return removed;
+	
+	
   }
 
   /**
@@ -228,7 +406,8 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
   @Override
   public ListIterator<E> listIterator(int pos) {
     // TODO
-	 
+	 if(pos < 0 || pos > this.size()) throw new IndexOutOfBoundsException();
+	 return new PagedListIterator(pos);
   }
 
   // --- Private Helper Methods and Classes ---
@@ -254,7 +433,7 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
 	  int index = Collections.binarySearch(pageIndex, pos, INDEX_COMPARATOR);
 	  if(index > pageIndex.size()) throw new IllegalArgumentException();  //?
 	  
-	  int offset = 0;
+	  int offset = index - pageIndex.get(index).logicalIndex;
 	  
 	  return new PageInfo(pageIndex.get(index).page, offset);
   }
@@ -586,6 +765,18 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
      */
     PagedListIterator(int pos) {
       // TODO
+    	this.expectedModificationCount = modificationCount;
+    	lastItemIndex = -1;
+    	lastDirection = Direction.NONE;
+        // Logical index the iterator starts at
+        this.logicalIndex = pos;
+
+        // Find the exact starting page + in-page offset in O(log N_pages)
+        PageInfo<E> info = findPageForLogicalIndex(pos);
+
+        this.currentPage = info.page;
+        this.pageOffset = info.offset;
+    	
     }
 
     /**
@@ -610,6 +801,8 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public boolean hasNext() {
       // TODO
+    	checkComodification();
+    	 return logicalIndex < totalSize;
     }
 
     /**
@@ -619,6 +812,31 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public E next() {
       // TODO
+    	checkComodification();
+
+        // ----- No next element -----
+        if (!hasNext()) {
+            throw new NoSuchElementException();
+        }
+
+        // The element to return is currentPage.items[pageOffset]
+        E item = currentPage.items[pageOffset];
+
+
+        // Advance logical cursor
+        logicalIndex++;
+
+        // Advance pageOffset inside the page
+        pageOffset++;
+
+        // ----- Move to next page if we passed the end of the current page -----
+        if (pageOffset >= currentPage.count) {
+            // move to the next page and reset offset to 0
+            currentPage = currentPage.next;
+            pageOffset = 0;
+        }
+
+        return item; 
     }
 
     /**
@@ -628,7 +846,8 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public boolean hasPrevious() {
       // TODO
-    	
+    	checkComodification();
+    	return logicalIndex > 0;
     }
 
     /**
@@ -638,6 +857,21 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public E previous() {
       // TODO
+    	if(!hasNext()) {
+    		throw new NoSuchElementException();
+    	}
+    	
+    	E item = currentPage.items[pageOffset];
+    	
+    	logicalIndex--;
+    	pageOffset--;
+    	
+    	if(pageOffset <= 0) {
+    		currentPage = currentPage.prev;
+    		pageOffset = currentPage.count;
+    	}
+    	
+    	return item;
     }
 
     /**
@@ -647,6 +881,8 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public int nextIndex() {
       // TODO
+    	checkComodification();
+    	return logicalIndex;
     }
 
     /**
@@ -656,6 +892,8 @@ public class IndexedPagedList<E> extends AbstractSequentialList<E> implements Li
     @Override
     public int previousIndex() {
       // TODO
+    	checkComodification();
+    	return logicalIndex - 1;
     }
 
     /**
